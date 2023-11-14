@@ -1,0 +1,70 @@
+name: Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_openwrt:
+
+    name: Build firmware
+    runs-on: ubuntu-20.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup
+        run: sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
+
+      - name: Update feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configuration
+        run: |
+          # MT7981
+          cp -f defconfig/mt7981-ax3000.config .config
+          make defconfig
+
+      - name: Compile
+        run: |
+          make download -j$(nproc)
+          make V=s -j$(nproc)
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p ./artifact/firmware
+          mkdir -p ./artifact/package
+          mkdir -p ./artifact/buildinfo
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/targets/ -type f) ./artifact/firmware/
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
+
+      - name: Deliver buildinfo
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenWrt_buildinfo
+          path: ./artifact/buildinfo/
+
+      - name: Deliver package
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenWrt_package
+          path: ./artifact/package/
+
+      - name: Deliver firmware
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenWrt_firmware
+          path: ./artifact/firmware/
+
+      # - name: Upload release asset
+      #   if: github.event == 'release'
+      #   uses: svenstaro/upload-release-action@v2
+        # with:
+        #   repo_token: ${{ secrets.YOURTOKEN }}
+        #   file: ./artifact/firmware/*
+        #   tag: ${{ github.ref }}
+        #   file_glob: true
