@@ -573,6 +573,9 @@ int cr_set_usage(int level)
 	pr_info("              7     0~1        Set hnat counter update to nf_conntrack\n");
 	pr_info("              8     0~1        Set hnat disable/enable ipv6\n");
 	pr_info("              9     0~1        Set hnat disable/enable guest (rax1/ra1)\n");
+	pr_info("             10     0~1        Set hnat disable/enable dscp setting\n");
+	pr_info("             11     1~30       Set hnat band rate\n");
+	pr_info("             12     0~1        Set hnat macvlan support mode\n");
 
 	return 0;
 }
@@ -701,6 +704,58 @@ int set_ipv6_toggle(int toggle)
 	return 0;
 }
 
+int set_dscp_toggle(int toggle)
+{
+	struct mtk_hnat *h = hnat_priv;
+
+	if (toggle == 1)
+		pr_info("Enable hqos dscp setting\n");
+	else if (toggle == 0)
+		pr_info("Disable hqos dscp setting\n");
+	else {
+		pr_info("input error, current hqos dscp setting=%d\n", h->dscp_en);
+		return 0;
+	}
+	h->dscp_en = toggle;
+
+	return 0;
+}
+
+int bind_rate_setting(int bind_rate)
+{
+	int i;
+
+	if ((bind_rate > 30) || (bind_rate <1)) {
+		bind_rate = 30;
+		pr_info("bind_rate max interval = 30\n");
+	} else {
+		pr_info("bind_rate = %d\n", bind_rate);
+	}
+
+	/* Keep alive timer for bind FOE UDP entry */
+	for (i = 0; i < CFG_PPE_NUM; i++)
+		cr_set_field(hnat_priv->ppe_base[i] + PPE_BNDR, BIND_RATE, bind_rate);
+
+	return 0;
+}
+
+int set_macvlan_support(int toggle)
+{
+	struct mtk_hnat *h = hnat_priv;
+
+	if (toggle == 1)
+		pr_info("Enable macvlan support\n");
+	else if (toggle == 0)
+		pr_info("Disable macvlan support\n");
+	else {
+		pr_info("input error, current macvlan support setting=%d\n", h->macvlan_support);
+		return 0;
+	}
+	h->macvlan_support = toggle;
+
+	return 0;
+}
+
 void mtk_ppe_dev_hook(const char *name, int toggle)
 {
 	struct net_device *dev;
@@ -754,6 +809,8 @@ static const debugfs_write_func cr_set_func[] = {
 	[4] = udp_bind_lifetime, [5] = tcp_keep_alive,
 	[6] = udp_keep_alive,    [7] = set_nf_update_toggle,
 	[8] = set_ipv6_toggle,   [9] = set_guest_toggle,
+	[10] = set_dscp_toggle,  [11] = bind_rate_setting,
+	[12] = set_macvlan_support,
 };
 
 int read_mib(struct mtk_hnat *h, u32 ppe_id,
@@ -1379,6 +1436,30 @@ int __hnat_entry_read(struct seq_file *m, void *private, u32 ppe_id)
 	return 0;
 }
 
+static int hnat_stats_read(struct seq_file *m, void *private)
+{
+	struct mtk_hnat *h = hnat_priv;
+	struct foe_entry *entry, *end;
+	int cnt, i;
+
+	seq_printf(m, "PPE_NUM=%d\n", CFG_PPE_NUM);
+
+	for (i = 0; i < CFG_PPE_NUM; i++) {
+		cnt = 0;
+		entry = h->foe_table_cpu[i];
+		end = h->foe_table_cpu[i] + hnat_priv->foe_etry_num;
+		while (entry < end) {
+			if (entry->bfib1.state == dbg_entry_state)
+				cnt++;
+			entry++;
+		}
+		seq_printf(m, "ALL_PPE%d=%d\n", i, hnat_priv->foe_etry_num);
+		seq_printf(m, "BIND_PPE%d=%d\n", i, cnt);
+	}
+
+	return 0;
+}
+
 int hnat_entry_read(struct seq_file *m, void *private)
 {
 	int i;
@@ -1452,6 +1533,18 @@ static const struct file_operations hnat_entry_fops = {
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.write = hnat_entry_write,
+	.release = single_release,
+};
+
+static int hnat_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, hnat_stats_read, file->private_data);
+}
+
+static const struct file_operations hnat_stats_fops = {
+	.open = hnat_stats_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
 	.release = single_release,
 };
 
@@ -1531,6 +1624,9 @@ ssize_t hnat_setting_write(struct file *file, const char __user *buffer,
 	case 7:
 	case 8:
 	case 9:
+	case 10:
+	case 11:
+	case 12:
 		p_token = strsep(&p_buf, p_delimiter);
 		if (!p_token)
 			arg1 = 0;
@@ -2361,6 +2457,8 @@ int hnat_init_debugfs(struct mtk_hnat *h)
 			    &cpu_reason_fops);
 	debugfs_create_file("hnat_entry", S_IRUGO | S_IRUGO, root, h,
 			    &hnat_entry_fops);
+	debugfs_create_file("hnat_stats", S_IRUGO | S_IRUGO, root, h,
+			    &hnat_stats_fops);
 	debugfs_create_file("hnat_setting", S_IRUGO | S_IRUGO, root, h,
 			    &hnat_setting_fops);
 	debugfs_create_file("mcast_table", S_IRUGO | S_IRUGO, root, h,

@@ -299,7 +299,7 @@ void foe_clear_entry(struct neighbour *neigh)
 				*((u32 *)h_dest) = swab32(entry->ipv4_hnapt.dmac_hi);
 				*((u16 *)&h_dest[4]) =
 					swab16(entry->ipv4_hnapt.dmac_lo);
-				if (memcmp(h_dest, neigh->ha, ETH_ALEN) != 0) {
+				if (!ether_addr_equal(h_dest, neigh->ha)) {
 					cr_set_field(hnat_priv->ppe_base[i] + PPE_TB_CFG,
 						     SMA, SMA_ONLY_FWD_CPU);
 
@@ -869,6 +869,10 @@ static unsigned int
 mtk_hnat_ipv4_nf_pre_routing(void *priv, struct sk_buff *skb,
 			     const struct nf_hook_state *state)
 {
+	struct flow_offload_hw_path hw_path = { .dev = skb->dev,
+						.virt_dev = skb->dev,
+						.flags = 0 };
+
 	if (!skb)
 		goto drop;
 
@@ -881,6 +885,14 @@ mtk_hnat_ipv4_nf_pre_routing(void *priv, struct sk_buff *skb,
 	}
 
 	hnat_set_head_frags(state, skb, -1, hnat_set_iif);
+
+	if (skb_hnat_iface(skb) == FOE_MAGIC_GE_VIRTUAL
+	    && skb->dev->netdev_ops->ndo_flow_offload_check) {
+		skb->dev->netdev_ops->ndo_flow_offload_check(&hw_path);
+
+		if (hw_path.flags & FLOW_OFFLOAD_PATH_TNL)
+			skb_hnat_alg(skb) = 1;
+	}
 
 	pre_routing_print(skb, state->in, state->out, __func__);
 
@@ -1207,6 +1219,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 	u32 qid = 0;
 	u32 port_id = 0;
 	int mape = 0;
+	u8  dscp = 0;
 
 	ct = nf_ct_get(skb, &ctinfo);
 
@@ -1293,6 +1306,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 
 			} else {
 				entry.ipv4_hnapt.iblk2.dscp = iph->tos;
+				dscp = iph->tos;
 				if (hnat_priv->data->per_flow_accounting)
 					entry.ipv4_hnapt.iblk2.mibf = 1;
 
@@ -1472,6 +1486,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 				mape = 1;
 				entry.ipv4_hnapt.iblk2.dscp =
 					foe->ipv4_hnapt.iblk2.dscp;
+				dscp = foe->ipv4_hnapt.iblk2.dscp;
 				if (hnat_priv->data->per_flow_accounting)
 					entry.ipv4_hnapt.iblk2.mibf = 1;
 
@@ -1484,6 +1499,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 				entry.ipv4_hnapt.dip = foe->ipv4_hnapt.dip;
 				entry.ipv4_hnapt.sport = foe->ipv4_hnapt.sport;
 				entry.ipv4_hnapt.dport = foe->ipv4_hnapt.dport;
+
 
 				entry.ipv4_hnapt.new_sip =
 					foe->ipv4_hnapt.new_sip;
@@ -1568,7 +1584,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 			gmac = ((skb_hnat_entry(skb) >> 1) % hnat_priv->gmac_num) ?
 				 NR_GMAC2_PORT : NR_GMAC1_PORT;
 		else {
-			if (of_machine_is_compatible("glinet,gl-mt3000")||of_machine_is_compatible("glinet,mt3000-snand"))
+			if (of_machine_is_compatible("glinet,mt2500-emmc")||of_machine_is_compatible("glinet,mt3000-snand"))
 				gmac = NR_GMAC2_PORT;
 			else
 				gmac = NR_GMAC1_PORT;
@@ -1583,7 +1599,7 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 			/* Set act_dp = wan_dev */
 			entry.ipv4_hnapt.act_dp = dev->ifindex;
 		} else {
-			if (of_machine_is_compatible("glinet,gl-mt3000")||of_machine_is_compatible("glinet,mt3000-snand"))
+			if (of_machine_is_compatible("glinet,mt2500-emmc")||of_machine_is_compatible("glinet,mt3000-snand"))
 				gmac = NR_GMAC1_PORT;
 			else
 				gmac = (IS_GMAC1_MODE) ? NR_GMAC1_PORT : NR_GMAC2_PORT;
@@ -1624,7 +1640,9 @@ static unsigned int skb_to_hnat_info(struct sk_buff *skb,
 		qid = port_id & MTK_QDMA_TX_MASK;
 	else
 		qid = 0;
-
+	if ((IS_HQOS_MODE) && (dscp!=0) &&(hnat_priv->dscp_en))
+		qid = (dscp>>2)& (MTK_QDMA_TX_MASK);
+		
 	if (IS_IPV4_GRP(foe)) {
 		entry.ipv4_hnapt.iblk2.dp = gmac;
 		entry.ipv4_hnapt.iblk2.port_mg =
@@ -1742,7 +1760,7 @@ int mtk_sw_nat_hook_tx(struct sk_buff *skb, int gmac_no)
 
 	if (!skb_hnat_is_hashed(skb))
 		return NF_ACCEPT;
-
+	
 	if (skb_hnat_entry(skb) >= hnat_priv->foe_etry_num ||
 	    skb_hnat_ppe(skb) >= CFG_PPE_NUM)
 		return NF_ACCEPT;
@@ -2065,7 +2083,8 @@ static unsigned int mtk_hnat_nf_post_routing(
 {
 	struct foe_entry *entry;
 	struct flow_offload_hw_path hw_path = { .dev = (struct net_device*)out,
-						.virt_dev = (struct net_device*)out };
+						.virt_dev = (struct net_device*)out,
+						.flags = 0 };
 	const struct net_device *arp_dev = out;
 
 	if (skb->protocol == htons(ETH_P_IPV6) && !hnat_priv->ipv6_en) {
@@ -2080,6 +2099,9 @@ static unsigned int mtk_hnat_nf_post_routing(
 		return 0;
 
 	if (unlikely(!skb_hnat_is_hashed(skb)))
+		return 0;
+		
+	if (unlikely(skb->mark == HNAT_EXCEPTION_TAG))
 		return 0;
 
 	if (out->netdev_ops->ndo_flow_offload_check) {
