@@ -490,6 +490,26 @@ define Device/glinet_gl-mt6000
 endef
 TARGET_DEVICES += glinet_gl-mt6000
 
+define Device/ruijie-rg-x60-pro-stock
+  DEVICE_VENDOR := Ruijie
+  DEVICE_MODEL := Ruijie RG-X60 Pro (Stock)
+  DEVICE_DTS := mt7986a-ruijie-rg-x60-pro-stock
+  DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
+  SUPPORTED_DEVICES := ruijie,rg-x60-pro-stock
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += ruijie-rg-x60-pro-stock
+
+define Device/ruijie-rg-x60-pro
+  DEVICE_VENDOR := Ruijie
+  DEVICE_MODEL := Ruijie RG-X60 Pro
+  DEVICE_DTS := mt7986a-ruijie-rg-x60-pro
+  DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
+  SUPPORTED_DEVICES := ruijie,rg-x60-pro
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += ruijie-rg-x60-pro
+
 define Device/tplink_tl-common
     DEVICE_VENDOR := TP-Link
     DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
@@ -514,3 +534,21 @@ define Device/tplink_tl-xdr6088
     $(call Device/tplink_tl-common)
 endef
 TARGET_DEVICES += tplink_tl-xdr6088
+
+define Device/zyxel_ex5700
+    DEVICE_VENDOR := Zyxel
+    DEVICE_MODEL := EX5700
+    DEVICE_DTS := mt7986a-zyxel-ex5700
+    SUPPORTED_DEVICES := zyxel,ex5700
+    DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
+    DEVICE_PACKAGES := $(MT7986_USB_PKGS)
+    UBINIZE_OPTS := -E 5
+    BLOCKSIZE := 256k
+    PAGESIZE := 4096
+    IMAGE_SIZE := 485888k
+    KERNEL_IN_UBI := 1
+    IMAGES += factory.bin
+    IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)
+    IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += zyxel_ex5700
